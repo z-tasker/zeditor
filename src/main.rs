@@ -29,7 +29,6 @@ struct App {
     current_frame: u64,
     fps: Option<f64>,
     playing: bool,
-    direction: i32, // 1 forward, -1 backward
     speed: f64, // 1.0 or 2.0
     mode: Mode,
     chunk_frames: u64,
@@ -37,6 +36,11 @@ struct App {
     clip_end: Option<u64>,
     clip_name: Option<String>,
     mpv_stream: Option<UnixStream>,
+    naming_mode: bool,
+    name_input: String,
+    looping_clip: bool,
+    export_status: Option<String>,
+    mpv_child: Option<tokio::process::Child>,
 }
 
 impl App {
@@ -47,7 +51,6 @@ impl App {
             current_frame: 0,
             fps: None,
             playing: false,
-            direction: 1,
             speed: 1.0,
             mode: Mode::Normal,
             chunk_frames: 30,
@@ -55,6 +58,24 @@ impl App {
             clip_end: None,
             clip_name: None,
             mpv_stream: None,
+            naming_mode: false,
+            name_input: String::new(),
+            looping_clip: false,
+            export_status: None,
+            mpv_child: None,
+        }
+    }
+
+    async fn cleanup(&mut self) {
+        // Close mpv stream
+        if let Some(mut stream) = self.mpv_stream.take() {
+            let _ = stream.shutdown().await;
+        }
+        
+        // Kill mpv process
+        if let Some(mut child) = self.mpv_child.take() {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
         }
     }
 
@@ -86,20 +107,63 @@ impl App {
         None
     }
 
-    async fn update(&mut self, _delta_ms: u64) {
+    async fn update(&mut self, delta_ms: u64) {
         // Get current time from mpv
         if let Some(time) = self.get_time().await {
             if let Some(fps) = self.fps {
                 self.current_frame = (time * fps) as u64;
+                
+                // Handle clip looping
+                if self.looping_clip {
+                    if let (Some(start), Some(end)) = (self.clip_start, self.clip_end) {
+                        if self.current_frame >= end {
+                            // Loop back to start
+                            let start_time = start as f64 / fps;
+                            let cmd = serde_json::json!({"command": ["seek", start_time, "absolute"]});
+                            self.send_command(cmd).await;
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Clear export status after 3 seconds
+        if self.export_status.is_some() {
+            static mut STATUS_TIMER: u64 = 0;
+            unsafe {
+                STATUS_TIMER += delta_ms;
+                if STATUS_TIMER > 3000 {
+                    self.export_status = None;
+                    STATUS_TIMER = 0;
+                }
             }
         }
     }
 
-    async fn export_clip(&self) -> anyhow::Result<()> {
+    async fn export_clip(&self) -> anyhow::Result<String> {
         if let (Some(start), Some(end), Some(name), Some(video_path), Some(fps)) =
             (self.clip_start, self.clip_end, &self.clip_name, &self.video_path, self.fps) {
             let start_time = start as f64 / fps;
             let duration = (end - start) as f64 / fps;
+
+            // Extract video name without extension for folder name
+            let video_stem = std::path::Path::new(video_path)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("clips");
+            
+            // Create folder name based on video filename
+            let clips_dir = format!("{}_clips", video_stem);
+            
+            // Create directory if it doesn't exist (mkdir -p behavior)
+            tokio::fs::create_dir_all(&clips_dir).await?;
+
+            // Use the name as filename, add .mp4 if no extension
+            let filename = if std::path::Path::new(name).extension().is_none() {
+                format!("{}/{}.mp4", clips_dir, name)
+            } else {
+                format!("{}/{}", clips_dir, name)
+            };
 
             let output = tokio::process::Command::new("ffmpeg")
                 .args(&[
@@ -107,13 +171,13 @@ impl App {
                     "-ss", &format!("{:.3}", start_time),
                     "-t", &format!("{:.3}", duration),
                     "-c", "copy",
-                    name,
+                    &filename,
                 ])
                 .output()
                 .await?;
 
             if output.status.success() {
-                Ok(())
+                Ok(filename)
             } else {
                 Err(anyhow::anyhow!("ffmpeg failed"))
             }
@@ -160,12 +224,15 @@ impl App {
                 "--really-quiet",
                 "--no-terminal",
                 "--ontop", // always on top
+                "--autofit=1200x800", // larger window size
                 "--input-ipc-server=/tmp/zeditor_mpv.sock",
                 &path,
             ])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()?;
+        
+        self.mpv_child = Some(child);
 
         // Wait for socket
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
@@ -180,12 +247,13 @@ impl App {
     fn draw(&self, f: &mut ratatui::Frame) {
         let size = f.size();
 
-        // Split vertically: preview (main) and control bar (bottom)
+        // Split vertically: preview (main), control bar (middle), and name/status bar (bottom)
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Min(10), // preview area
                 Constraint::Length(5), // control bar
+                Constraint::Length(3), // name input or status
             ])
             .split(size);
 
@@ -195,15 +263,29 @@ impl App {
             Mode::Insert => "Insert",
         };
         let preview_text = if let Some(path) = &self.video_path {
-            format!("Mode: {}\nVideo: {}\nFrame: {} / {}\nFPS: {:.2}\nPlaying: {} Dir: {} Speed: {:.1}\n\n[Video playing in separate window]",
+            let status = if self.looping_clip { " (LOOPING CLIP)" } else { "" };
+            let mut clip_info = String::new();
+            
+            if let (Some(start), Some(fps)) = (self.clip_start, self.fps) {
+                let current_length = (self.current_frame.saturating_sub(start)) as f64 / fps;
+                clip_info = format!("\nClip Length: {:.2}s", current_length);
+                
+                if let Some(end) = self.clip_end {
+                    let final_length = (end.saturating_sub(start)) as f64 / fps;
+                    clip_info = format!("\nClip Length: {:.2}s (Final: {:.2}s)", current_length, final_length);
+                }
+            }
+            
+            format!("Mode: {}\nVideo: {}\nFrame: {} / {}\nFPS: {:.2}\nPlaying: {} Speed: {:.1}{}\n{}\n\n[Video playing in separate window]",
                     mode_str,
                     path,
                     self.current_frame,
                     self.total_frames.unwrap_or(0),
                     self.fps.unwrap_or(0.0),
                     self.playing,
-                    if self.direction == 1 { "fwd" } else { "bwd" },
-                    self.speed)
+                    self.speed,
+                    status,
+                    clip_info)
         } else {
             format!("Mode: {}\nNo video loaded. Provide path as arg.", mode_str)
         };
@@ -241,9 +323,39 @@ impl App {
             .style(Style::default().fg(Color::Red));
         f.render_widget(end_thumb, control_chunks[1]);
 
-        let controls = Paragraph::new("Controls here")
-            .block(Block::default().title("Controls").borders(Borders::ALL));
+        let controls_text = if self.naming_mode {
+            "Press Enter to export clip".to_string()
+        } else {
+            "Space: Play/Pause | l: Play | w/b: Speed\ni: Insert mode | Enter: Loop clip | q: Quit".to_string()
+        };
+        let border_type = if self.naming_mode {
+            ratatui::widgets::BorderType::Double
+        } else {
+            ratatui::widgets::BorderType::Plain
+        };
+        let controls = Paragraph::new(controls_text)
+            .block(Block::default().title(if self.naming_mode { "Name Clip" } else { "Controls" }).borders(Borders::ALL).border_type(border_type));
         f.render_widget(controls, control_chunks[2]);
+
+        // Name input field or status bar
+        if self.naming_mode {
+            let name_text = format!("Enter clip name: {}", self.name_input);
+            let name_input = Paragraph::new(name_text)
+                .style(Style::default().fg(Color::Yellow))
+                .block(Block::default().title("Clip Name").borders(Borders::ALL).border_type(ratatui::widgets::BorderType::Double));
+            f.render_widget(name_input, chunks[2]);
+        } else if let Some(status) = &self.export_status {
+            let status_text = format!("✓ Wrote to {}", status);
+            let status_bar = Paragraph::new(status_text)
+                .style(Style::default().fg(Color::Green))
+                .block(Block::default().title("Export Status").borders(Borders::ALL));
+            f.render_widget(status_bar, chunks[2]);
+        } else {
+            // Empty placeholder to maintain consistent layout
+            let placeholder = Paragraph::new("")
+                .block(Block::default().title("Clip Name").borders(Borders::ALL));
+            f.render_widget(placeholder, chunks[2]);
+        }
     }
 }
 
@@ -252,9 +364,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     let video_path = args.get(1).cloned();
     // setup terminal
-    enable_raw_mode()?;
+    if let Err(e) = enable_raw_mode() {
+        eprintln!("Failed to enable raw mode: {}", e);
+        return Err(e.into());
+    }
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    if let Err(e) = execute!(stdout, EnterAlternateScreen, EnableMouseCapture) {
+        eprintln!("Failed to setup terminal: {}", e);
+        return Err(e.into());
+    }
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -266,6 +384,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // run app
     let res = run_app(&mut terminal, &mut app).await;
+
+    // cleanup mpv before restoring terminal
+    app.cleanup().await;
 
     // restore terminal
     disable_raw_mode()?;
@@ -300,7 +421,41 @@ async fn run_app<B: ratatui::backend::Backend>(
                 if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
                     return Ok(());
                 }
-                match app.mode {
+                if app.naming_mode {
+                    match key.code {
+                        KeyCode::Enter => {
+                            app.clip_name = Some(app.name_input.clone());
+                            app.naming_mode = false;
+                            app.looping_clip = false;
+                            match app.export_clip().await {
+                                Ok(filename) => {
+                                    app.export_status = Some(filename);
+                                    // Clear clip start/end after successful export
+                                    app.clip_start = None;
+                                    app.clip_end = None;
+                                    app.clip_name = None;
+                                    // Ensure we're in normal mode
+                                    app.mode = Mode::Normal;
+                                }
+                                Err(_) => {
+                                    app.export_status = Some("Export failed".to_string());
+                                }
+                            }
+                            app.name_input.clear();
+                        }
+                        KeyCode::Esc => {
+                            app.naming_mode = false;
+                        }
+                        KeyCode::Backspace => {
+                            app.name_input.pop();
+                        }
+                        KeyCode::Char(c) => {
+                            app.name_input.push(c);
+                        }
+                        _ => {}
+                    }
+                } else {
+                    match app.mode {
                     Mode::Normal => match key.code {
                         KeyCode::Char('q') => return Ok(()),
                         KeyCode::Char(' ') => {
@@ -312,21 +467,21 @@ async fn run_app<B: ratatui::backend::Backend>(
                             let cmd = serde_json::json!({"command": ["cycle", "pause"]});
                             app.send_command(cmd).await;
                         }
-                        KeyCode::Char('h') => {
-                            app.direction = -1;
-                            app.playing = true;
-                        }
                         KeyCode::Char('l') => {
-                            app.direction = 1;
                             app.playing = true;
+                            // Ensure mpv is playing and set speed
+                            let unpause_cmd = serde_json::json!({"command": ["set_property", "pause", false]});
+                            app.send_command(unpause_cmd).await;
+                            let speed_cmd = serde_json::json!({"command": ["set_property", "speed", app.speed]});
+                            app.send_command(speed_cmd).await;
                         }
                         KeyCode::Char('w') => {
-                            app.speed = (app.speed + 0.5).min(3.0);
+                            app.speed = (app.speed + 0.5).min(10.0);
                             let cmd = serde_json::json!({"command": ["set_property", "speed", app.speed]});
                             app.send_command(cmd).await;
                         }
                         KeyCode::Char('b') => {
-                            app.speed = (app.speed - 0.5).max(0.5);
+                            app.speed = (app.speed - 0.5).max(0.1);
                             let cmd = serde_json::json!({"command": ["set_property", "speed", app.speed]});
                             app.send_command(cmd).await;
                         }
@@ -338,11 +493,8 @@ async fn run_app<B: ratatui::backend::Backend>(
                             app.send_command(cmd).await;
                         }
                         KeyCode::Enter => {
-                            if app.clip_start.is_some() && app.clip_end.is_some() {
-                                app.clip_name = Some("clip.mp4".to_string());
-                                if let Err(_e) = app.export_clip().await {
-                                }
-                            }
+                            // Enter in normal mode doesn't do anything special anymore
+                            // since we trigger looping when setting clip end
                         }
                         _ => {}
                     },
@@ -353,8 +505,25 @@ async fn run_app<B: ratatui::backend::Backend>(
                         KeyCode::Enter => {
                             if app.clip_start.is_none() {
                                 app.clip_start = Some(app.current_frame);
+                                // Return to normal mode and resume playback
+                                app.mode = Mode::Normal;
+                                app.playing = true;
+                                let cmd = serde_json::json!({"command": ["cycle", "pause"]});
+                                app.send_command(cmd).await;
                             } else if app.clip_end.is_none() {
                                 app.clip_end = Some(app.current_frame);
+                                // Start looping the clip, show name input, and return to normal mode
+                                app.looping_clip = true;
+                                app.naming_mode = true;
+                                app.name_input.clear();
+                                app.mode = Mode::Normal;
+                                app.playing = true;
+                                // Seek to start of clip
+                                if let (Some(start), Some(fps)) = (app.clip_start, app.fps) {
+                                    let start_time = start as f64 / fps;
+                                    let cmd = serde_json::json!({"command": ["seek", start_time, "absolute"]});
+                                    app.send_command(cmd).await;
+                                }
                             }
                         }
                         KeyCode::Char('h') => {
@@ -385,6 +554,7 @@ async fn run_app<B: ratatui::backend::Backend>(
                         }
                         _ => {}
                     },
+                    }
                 }
             }
         }
