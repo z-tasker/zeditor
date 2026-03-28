@@ -1,5 +1,5 @@
-use eframe::egui;
 use crate::{App, Mode};
+use eframe::egui;
 
 impl App {
     pub fn render_top_panel(&mut self, ctx: &egui::Context) {
@@ -13,7 +13,10 @@ impl App {
                     Mode::Normal => egui::Color32::GREEN,
                     Mode::Insert => egui::Color32::YELLOW,
                 };
-                ui.colored_label(mode_color, egui::RichText::new(mode_text).strong().size(16.0));
+                ui.colored_label(
+                    mode_color,
+                    egui::RichText::new(mode_text).strong().size(16.0),
+                );
                 ui.separator();
 
                 if let Some(path) = &self.video_path {
@@ -46,18 +49,24 @@ impl App {
             // Timeline/scrubber
             if let (Some(total), Some(fps)) = (self.total_frames, self.fps) {
                 let mut frame = self.current_frame as f64;
-                
+
                 ui.horizontal(|ui| {
                     ui.label(format!("Frame: {} / {}", self.current_frame, total));
                     ui.separator();
-                    ui.label(format!("Time: {:.2}s / {:.2}s",
+                    ui.label(format!(
+                        "Time: {:.2}s / {:.2}s",
                         self.current_frame as f64 / fps,
-                        total as f64 / fps));
+                        total as f64 / fps
+                    ));
                     ui.separator();
                     ui.label(format!("Speed: {:.1}x", self.speed));
                     ui.separator();
                     let mute_text = if self.muted { "MUTED" } else { "Audio ON" };
-                    let mute_color = if self.muted { egui::Color32::GRAY } else { egui::Color32::LIGHT_GREEN };
+                    let mute_color = if self.muted {
+                        egui::Color32::GRAY
+                    } else {
+                        egui::Color32::LIGHT_GREEN
+                    };
                     ui.colored_label(mute_color, mute_text);
                 });
 
@@ -73,12 +82,16 @@ impl App {
                 // Clip markers
                 ui.horizontal(|ui| {
                     if let Some(start) = self.clip_start {
-                        ui.colored_label(egui::Color32::GREEN,
-                            format!("IN: {} ({:.2}s)", start, start as f64 / fps));
+                        ui.colored_label(
+                            egui::Color32::GREEN,
+                            format!("IN: {} ({:.2}s)", start, start as f64 / fps),
+                        );
                     }
                     if let Some(end) = self.clip_end {
-                        ui.colored_label(egui::Color32::RED,
-                            format!("OUT: {} ({:.2}s)", end, end as f64 / fps));
+                        ui.colored_label(
+                            egui::Color32::RED,
+                            format!("OUT: {} ({:.2}s)", end, end as f64 / fps),
+                        );
                     }
                     if let (Some(start), Some(end)) = (self.clip_start, self.clip_end) {
                         let dur = (end - start) as f64 / fps;
@@ -91,7 +104,10 @@ impl App {
 
             // Playback controls
             ui.horizontal(|ui| {
-                if ui.button(if self.playing { "|| Pause" } else { "|> Play" }).clicked() {
+                if ui
+                    .button(if self.playing { "|| Pause" } else { "|> Play" })
+                    .clicked()
+                {
                     self.toggle_play();
                 }
 
@@ -125,13 +141,27 @@ impl App {
 
                 ui.separator();
 
-                let in_color = if self.clip_start.is_some() { egui::Color32::GREEN } else { egui::Color32::GRAY };
-                if ui.button(egui::RichText::new("[I]n").color(in_color)).clicked() {
+                let in_color = if self.clip_start.is_some() {
+                    egui::Color32::GREEN
+                } else {
+                    egui::Color32::GRAY
+                };
+                if ui
+                    .button(egui::RichText::new("[I]n").color(in_color))
+                    .clicked()
+                {
                     self.clip_start = Some(self.current_frame);
                 }
 
-                let out_color = if self.clip_end.is_some() { egui::Color32::RED } else { egui::Color32::GRAY };
-                if ui.button(egui::RichText::new("[O]ut").color(out_color)).clicked() {
+                let out_color = if self.clip_end.is_some() {
+                    egui::Color32::RED
+                } else {
+                    egui::Color32::GRAY
+                };
+                if ui
+                    .button(egui::RichText::new("[O]ut").color(out_color))
+                    .clicked()
+                {
                     self.clip_end = Some(self.current_frame);
                     if self.clip_start.is_some() {
                         self.looping_clip = true;
@@ -147,7 +177,11 @@ impl App {
                     self.looping_clip = false;
                 }
 
-                let loop_text = if self.looping_clip { "Loop ON" } else { "Loop OFF" };
+                let loop_text = if self.looping_clip {
+                    "Loop ON"
+                } else {
+                    "Loop OFF"
+                };
                 if ui.button(loop_text).clicked() {
                     self.looping_clip = !self.looping_clip;
                 }
@@ -159,7 +193,8 @@ impl App {
             ui.horizontal(|ui| {
                 ui.label("Clip name:");
                 let clip_name_id = egui::Id::new("clip_name_input");
-                let response = ui.add(egui::TextEdit::singleline(&mut self.clip_name).id(clip_name_id));
+                let response =
+                    ui.add(egui::TextEdit::singleline(&mut self.clip_name).id(clip_name_id));
 
                 // Focus the clip name input when naming_clip is set
                 if self.naming_clip {
@@ -167,9 +202,14 @@ impl App {
                     self.naming_clip = false;
                 }
 
-                let can_export = self.clip_start.is_some() && self.clip_end.is_some() && !self.clip_name.is_empty();
+                let can_export = self.clip_start.is_some()
+                    && self.clip_end.is_some()
+                    && !self.clip_name.is_empty();
 
-                if ui.add_enabled(can_export, egui::Button::new("Export")).clicked() {
+                if ui
+                    .add_enabled(can_export, egui::Button::new("Export"))
+                    .clicked()
+                {
                     match self.export_clip() {
                         Ok(filename) => {
                             self.export_status = Some(format!("Saved: {}", filename));
@@ -187,7 +227,10 @@ impl App {
                 }
 
                 // Enter in clip name input triggers export
-                if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && can_export {
+                if response.lost_focus()
+                    && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                    && can_export
+                {
                     match self.export_clip() {
                         Ok(filename) => {
                             self.export_status = Some(format!("Saved: {}", filename));
@@ -211,8 +254,12 @@ impl App {
             // Help
             ui.horizontal(|ui| {
                 let help = match self.mode {
-                    Mode::Normal => "[i] Insert mode | [Space] Play/Pause | [w/b] Speed | [Shift+I/O] Set marks",
-                    Mode::Insert => "[Esc/Enter] Exit | [h/l] Frame | [w/b] Chunk | [i] IN | [o] OUT",
+                    Mode::Normal => {
+                        "[i] Insert mode | [Space] Play/Pause | [w/b] Speed | [Shift+I/O] Set marks"
+                    }
+                    Mode::Insert => {
+                        "[Esc/Enter] Exit | [h/l] Frame | [w/b] Chunk | [i] IN | [o] OUT"
+                    }
                 };
                 ui.label(help);
             });
@@ -233,7 +280,7 @@ impl App {
                 let available = ui.available_size();
                 let video_size = player.size;
                 let aspect = video_size.x / video_size.y;
-                
+
                 // Calculate size that fits available space while maintaining aspect ratio
                 let size = if available.x / available.y > aspect {
                     // Available space is wider than video aspect ratio
@@ -252,8 +299,10 @@ impl App {
                 });
             } else {
                 ui.centered_and_justified(|ui| {
-                    ui.colored_label(egui::Color32::WHITE, 
-                        "Drag and drop a video file\nor pass path as command line argument");
+                    ui.colored_label(
+                        egui::Color32::WHITE,
+                        "Drag and drop a video file\nor pass path as command line argument",
+                    );
                 });
             }
         });

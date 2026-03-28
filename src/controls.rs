@@ -120,7 +120,11 @@ impl App {
         // w/down: chunk forward
         if i.key_pressed(egui::Key::W) || i.key_pressed(egui::Key::ArrowDown) {
             let max = self.total_frames.unwrap_or(u64::MAX).saturating_sub(1);
-            actions.seek_frame = Some(self.current_frame.saturating_add(self.chunk_frames).min(max));
+            actions.seek_frame = Some(
+                self.current_frame
+                    .saturating_add(self.chunk_frames)
+                    .min(max),
+            );
         }
 
         // i sets IN point (must be <= OUT if OUT exists)
@@ -133,7 +137,9 @@ impl App {
 
         // o sets OUT point (must be >= IN if IN exists)
         if i.key_pressed(egui::Key::O) {
-            let valid = self.clip_start.map_or(true, |start| self.current_frame >= start);
+            let valid = self
+                .clip_start
+                .map_or(true, |start| self.current_frame >= start);
             if valid {
                 actions.set_out = true;
             }

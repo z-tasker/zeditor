@@ -2,9 +2,9 @@ mod controls;
 mod ui;
 
 use eframe::egui;
+use serde_json::Value;
 use std::process::Command;
 use std::time::Instant;
-use serde_json::Value;
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Mode {
@@ -43,7 +43,7 @@ impl App {
     fn new(video_path: Option<String>) -> Self {
         // Initialize audio device
         let audio_device = egui_video::AudioDevice::new().ok();
-        
+
         Self {
             video_path: None,
             total_frames: None,
@@ -77,8 +77,10 @@ impl App {
         // Get video metadata via ffprobe
         let output = Command::new("ffprobe")
             .args([
-                "-v", "quiet",
-                "-print_format", "json",
+                "-v",
+                "quiet",
+                "-print_format",
+                "json",
                 "-show_format",
                 "-show_streams",
                 path,
@@ -86,13 +88,20 @@ impl App {
             .output()?;
 
         let json: Value = serde_json::from_slice(&output.stdout)?;
-        let streams = json["streams"].as_array().ok_or(anyhow::anyhow!("no streams"))?;
-        let video_stream = streams.iter().find(|s| s["codec_type"] == "video")
+        let streams = json["streams"]
+            .as_array()
+            .ok_or(anyhow::anyhow!("no streams"))?;
+        let video_stream = streams
+            .iter()
+            .find(|s| s["codec_type"] == "video")
             .ok_or(anyhow::anyhow!("no video stream"))?;
 
-        let duration: f64 = json["format"]["duration"].as_str()
-            .ok_or(anyhow::anyhow!("no duration"))?.parse()?;
-        let fps_str = video_stream["r_frame_rate"].as_str()
+        let duration: f64 = json["format"]["duration"]
+            .as_str()
+            .ok_or(anyhow::anyhow!("no duration"))?
+            .parse()?;
+        let fps_str = video_stream["r_frame_rate"]
+            .as_str()
             .ok_or(anyhow::anyhow!("no frame rate"))?;
         let fps_parts: Vec<&str> = fps_str.split('/').collect();
         let fps: f64 = fps_parts[0].parse::<f64>()? / fps_parts[1].parse::<f64>()?;
@@ -100,7 +109,7 @@ impl App {
         // Create egui-video player
         let path_string = path.to_string();
         let mut player = egui_video::Player::new(ctx, &path_string)?;
-        
+
         // Add audio if device is available
         if let Some(ref mut audio_device) = self.audio_device {
             player = player.with_audio(audio_device)?;
@@ -141,15 +150,16 @@ impl App {
         // Handle speed modulation via frame stepping (for non-1x speeds)
         if self.playing && self.speed != 1.0 {
             let fps = self.fps.unwrap_or(30.0);
-            let step_interval = std::time::Duration::from_millis((1000.0 / (fps * self.speed)) as u64);
-            
+            let step_interval =
+                std::time::Duration::from_millis((1000.0 / (fps * self.speed)) as u64);
+
             if now.duration_since(self.last_speed_step) >= step_interval {
                 let total = self.total_frames.unwrap_or(u64::MAX);
                 let current = self.current_frame;
-                
+
                 // Calculate next frame, respecting loop boundaries
                 let mut next_frame = current.saturating_add(1);
-                
+
                 // Handle looping
                 if let (Some(start), Some(end)) = (loop_start, loop_end) {
                     if next_frame >= end {
@@ -158,7 +168,7 @@ impl App {
                 } else if next_frame >= total {
                     next_frame = 0;
                 }
-                
+
                 // Seek to next frame
                 if let (Some(ref mut player), Some(duration)) = (&mut self.player, self.duration) {
                     let time = next_frame as f64 / fps;
@@ -167,7 +177,7 @@ impl App {
                     player.process_state();
                     self.current_frame = next_frame;
                 }
-                
+
                 self.last_speed_step = now;
             }
         } else if self.playing {
@@ -176,7 +186,7 @@ impl App {
                 if let Some(fps) = self.fps {
                     let elapsed_ms = player.elapsed_ms();
                     self.current_frame = ((elapsed_ms as f64 / 1000.0) * fps) as u64;
-                    
+
                     // Handle looping at 1x speed
                     if let (Some(start), Some(end)) = (loop_start, loop_end) {
                         if self.current_frame >= end {
@@ -201,7 +211,10 @@ impl App {
     fn export_clip(&mut self) -> anyhow::Result<String> {
         let start = self.clip_start.ok_or(anyhow::anyhow!("no clip start"))?;
         let end = self.clip_end.ok_or(anyhow::anyhow!("no clip end"))?;
-        let video_path = self.video_path.as_ref().ok_or(anyhow::anyhow!("no video"))?;
+        let video_path = self
+            .video_path
+            .as_ref()
+            .ok_or(anyhow::anyhow!("no video"))?;
         let fps = self.fps.ok_or(anyhow::anyhow!("no fps"))?;
 
         if self.clip_name.is_empty() {
@@ -232,10 +245,14 @@ impl App {
         let output = Command::new("ffmpeg")
             .args([
                 "-y",
-                "-i", video_path,
-                "-ss", &format!("{:.3}", start_time),
-                "-t", &format!("{:.3}", duration),
-                "-c", "copy",
+                "-i",
+                video_path,
+                "-ss",
+                &format!("{:.3}", start_time),
+                "-t",
+                &format!("{:.3}", duration),
+                "-c",
+                "copy",
                 &filename,
             ])
             .output()?;
@@ -279,7 +296,7 @@ impl App {
     fn set_speed(&mut self, speed: f64) {
         let old_speed = self.speed;
         self.speed = speed.clamp(0.1, 10.0);
-        
+
         // Handle playback mode change
         if let Some(ref mut player) = self.player {
             if self.playing {
