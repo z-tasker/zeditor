@@ -211,12 +211,16 @@ impl App {
         let start_time = start as f64 / fps;
         let duration = (end - start) as f64 / fps;
 
-        let video_stem = std::path::Path::new(video_path)
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("clips");
-
-        let clips_dir = format!("{}_clips", video_stem);
+        // Check for ZEDITOR_CLIPS_DIR env var, otherwise use default {video}_clips/
+        let clips_dir = if let Ok(dir) = std::env::var("ZEDITOR_CLIPS_DIR") {
+            dir
+        } else {
+            let video_stem = std::path::Path::new(video_path)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("clips");
+            format!("{}_clips", video_stem)
+        };
         std::fs::create_dir_all(&clips_dir)?;
 
         let filename = if std::path::Path::new(&self.clip_name).extension().is_none() {
