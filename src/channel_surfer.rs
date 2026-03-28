@@ -368,6 +368,41 @@ impl eframe::App for ChannelSurfer {
                 self.cycle_effect();
             }
             
+            // Mouse scroll wheel to cycle effects
+            let scroll_delta = i.smooth_scroll_delta;
+            if scroll_delta.y > 0.0 {
+                // Scroll up - previous effect
+                self.active_effect = match self.active_effect {
+                    VideoEffect::Pixelate { block_size } if block_size > 8 => 
+                        VideoEffect::Pixelate { block_size: block_size / 2 },
+                    VideoEffect::Pixelate { .. } => VideoEffect::None,
+                    VideoEffect::Sepia => VideoEffect::Pixelate { block_size: 32 },
+                    VideoEffect::RgbSplit { offset } if offset > 5 =>
+                        VideoEffect::RgbSplit { offset: offset - 5 },
+                    VideoEffect::RgbSplit { .. } => VideoEffect::Sepia,
+                    VideoEffect::Invert => VideoEffect::RgbSplit { offset: 15 },
+                    VideoEffect::Contrast { factor } if factor > 1.5 =>
+                        VideoEffect::Contrast { factor: factor - 0.5 },
+                    VideoEffect::Contrast { .. } => VideoEffect::Invert,
+                    VideoEffect::Compression { quality } if quality < 40 =>
+                        VideoEffect::Compression { quality: quality * 2 },
+                    VideoEffect::Compression { .. } => VideoEffect::Contrast { factor: 2.5 },
+                    VideoEffect::Glitch { .. } => VideoEffect::Compression { quality: 5 },
+                    VideoEffect::MotionGlitch { trail_length } if trail_length > 5 =>
+                        VideoEffect::MotionGlitch { trail_length: trail_length - 5 },
+                    VideoEffect::MotionGlitch { .. } => VideoEffect::Glitch { intensity: 10, seed: 0 },
+                    VideoEffect::Datamosh { displacement } if displacement < 0 =>
+                        VideoEffect::Datamosh { displacement: -displacement },
+                    VideoEffect::Datamosh { .. } => VideoEffect::MotionGlitch { trail_length: 15 },
+                    VideoEffect::None => VideoEffect::Datamosh { displacement: -8 },
+                };
+                self.last_processed_frame = None;
+                println!("Effect: {}", self.active_effect.name());
+            } else if scroll_delta.y < 0.0 {
+                // Scroll down - next effect (same as S key)
+                self.cycle_effect();
+            }
+            
             // Q or Esc to show channel info again
             if i.key_pressed(egui::Key::Q) || i.key_pressed(egui::Key::Escape) {
                 self.show_channel_info = true;

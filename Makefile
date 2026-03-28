@@ -9,9 +9,12 @@ export FFMPEG_DIR
 export PKG_CONFIG_PATH
 export LIBRARY_PATH
 
-.PHONY: build run clean
+.PHONY: init build run clean
 
-build:
+init:
+	git submodule update --init --recursive
+
+build: init
 	cargo build --release
 
 run: build

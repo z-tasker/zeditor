@@ -22,6 +22,17 @@ pub enum VideoEffect {
     Contrast { factor: f32 },
     /// H.264/MPEG compression artifacts (DCT blocking, chroma subsampling)
     Compression { quality: u8 },
+    /// Decoder corruption - frozen macroblocks, static bursts
+    Glitch {
+        /// Intensity 1-10
+        intensity: u8,
+        /// Seed for random corruption patterns
+        seed: u32,
+    },
+    /// Motion trail with corruption (like P-frame decode errors)
+    MotionGlitch { trail_length: u8 },
+    /// Datamoshing - motion vectors applied wrong (block displacement)
+    Datamosh { displacement: i8 },
 }
 
 impl VideoEffect {
@@ -34,7 +45,10 @@ impl VideoEffect {
             VideoEffect::RgbSplit { .. } => "RGB SPLIT",
             VideoEffect::Invert => "INVERT",
             VideoEffect::Contrast { .. } => "CONTRAST",
-            VideoEffect::Compression { quality } => "H264",
+            VideoEffect::Compression { .. } => "H264",
+            VideoEffect::Glitch { .. } => "GLITCH",
+            VideoEffect::MotionGlitch { .. } => "MOTION GLITCH",
+            VideoEffect::Datamosh { .. } => "DATAMOSH",
         }
     }
     
@@ -48,6 +62,9 @@ impl VideoEffect {
             VideoEffect::Invert => apply_invert(input),
             VideoEffect::Contrast { factor } => apply_contrast(input, *factor),
             VideoEffect::Compression { quality } => apply_compression(input, *quality),
+            VideoEffect::Glitch { intensity, seed } => apply_glitch(input, *intensity, *seed),
+            VideoEffect::MotionGlitch { trail_length } => apply_motion_glitch(input, *trail_length),
+            VideoEffect::Datamosh { displacement } => apply_datamosh(input, *displacement),
         }
     }
     
@@ -65,7 +82,19 @@ impl VideoEffect {
             VideoEffect::Invert => VideoEffect::Contrast { factor: 1.5 },
             VideoEffect::Contrast { factor } if *factor < 2.5 =>
                 VideoEffect::Contrast { factor: factor + 0.5 },
-            VideoEffect::Contrast { .. } => VideoEffect::None,
+            VideoEffect::Contrast { .. } => VideoEffect::Compression { quality: 20 },
+            VideoEffect::Compression { quality } if *quality > 5 =>
+                VideoEffect::Compression { quality: quality / 2 },
+            VideoEffect::Compression { .. } => VideoEffect::Glitch { intensity: 3, seed: 0 },
+            VideoEffect::Glitch { intensity, .. } if *intensity < 8 =>
+                VideoEffect::Glitch { intensity: intensity + 2, seed: 12345 },
+            VideoEffect::Glitch { .. } => VideoEffect::MotionGlitch { trail_length: 5 },
+            VideoEffect::MotionGlitch { trail_length } if *trail_length < 15 =>
+                VideoEffect::MotionGlitch { trail_length: trail_length + 5 },
+            VideoEffect::MotionGlitch { .. } => VideoEffect::Datamosh { displacement: 8 },
+            VideoEffect::Datamosh { displacement } if *displacement > 0 =>
+                VideoEffect::Datamosh { displacement: -displacement },
+            VideoEffect::Datamosh { .. } => VideoEffect::None,
         }
     }
 }
@@ -196,4 +225,147 @@ fn apply_contrast(input: &ColorImage, factor: f32) -> ColorImage {
     }
     
     output
+}
+
+/// Apply H.264/MPEG compression artifacts
+/// quality: 1-50, lower = more compression artifacts
+fn apply_compression(input: &ColorImage, quality: u8) -> ColorImage {
+    let [w, h] = input.size;
+    let mut output = input.clone();
+    
+    // Block size for DCT (8 or 16 pixels)
+    let block_size = 8usize;
+    // Chroma subsampling factor (2 for 4:2:0)
+    let chroma_subsample = 2usize;
+    // Quantization step based on quality
+    let quant_step = (51 - quality.clamp(1, 50)) as u16;
+    
+    // First pass: Chroma subsampling (4:2:0)
+    // Process color in 2x2 blocks
+    for y in (0..h).step_by(chroma_subsample) {
+        for x in (0..w).step_by(chroma_subsample) {
+            let mut r_sum: u32 = 0;
+            let mut g_sum: u32 = 0;
+            let mut b_sum: u32 = 0;
+            let mut count: u32 = 0;
+            
+            // Average the 2x2 block
+            for dy in 0..chroma_subsample {
+                for dx in 0..chroma_subsample {
+                    if y + dy < h && x + dx < w {
+                        let idx = (y + dy) * w + (x + dx);
+                        let pixel = input.pixels[idx];
+                        r_sum += pixel.r() as u32;
+                        g_sum += pixel.g() as u32;
+                        b_sum += pixel.b() as u32;
+                        count += 1;
+                    }
+                }
+            }
+            
+            let avg_r = (r_sum / count) as u8;
+            let avg_g = (g_sum / count) as u8;
+            let avg_b = (b_sum / count) as u8;
+            
+            // Apply subsampled color back to block
+            for dy in 0..chroma_subsample {
+                for dx in 0..chroma_subsample {
+                    if y + dy < h && x + dx < w {
+                        let idx = (y + dy) * w + (x + dx);
+                        let orig = input.pixels[idx];
+                        // Keep luma (brightness) from original, use subsampled chroma
+                        let luma = (orig.r() as u16 + orig.g() as u16 + orig.b() as u16) / 3;
+                        let color_luma = (avg_r as u16 + avg_g as u16 + avg_b as u16) / 3;
+                        let luma_diff = luma.saturating_sub(color_luma);
+                        
+                        let new_r = (avg_r as u16 + luma_diff).clamp(0, 255) as u8;
+                        let new_g = (avg_g as u16 + luma_diff).clamp(0, 255) as u8;
+                        let new_b = (avg_b as u16 + luma_diff).clamp(0, 255) as u8;
+                        
+                        output.pixels[idx] = egui::Color32::from_rgb(new_r, new_g, new_b);
+                    }
+                }
+            }
+        }
+    }
+    
+    // Second pass: DCT blocking and quantization
+    for y in (0..h).step_by(block_size) {
+        for x in (0..w).step_by(block_size) {
+            // Calculate average color for block
+            let mut r_sum: u32 = 0;
+            let mut g_sum: u32 = 0;
+            let mut b_sum: u32 = 0;
+            let mut count: u32 = 0;
+            
+            let block_h = (y + block_size).min(h) - y;
+            let block_w = (x + block_size).min(w) - x;
+            
+            for by in 0..block_h {
+                for bx in 0..block_w {
+                    let idx = (y + by) * w + (x + bx);
+                    let pixel = output.pixels[idx];
+                    r_sum += pixel.r() as u32;
+                    g_sum += pixel.g() as u32;
+                    b_sum += pixel.b() as u32;
+                    count += 1;
+                }
+            }
+            
+            // Quantize to fewer levels based on quality
+            let avg_r = ((r_sum / count) as u16 / quant_step * quant_step).clamp(0, 255) as u8;
+            let avg_g = ((g_sum / count) as u16 / quant_step * quant_step).clamp(0, 255) as u8;
+            let avg_b = ((b_sum / count) as u16 / quant_step * quant_step).clamp(0, 255) as u8;
+            
+            // Add blocking artifact (slight darkening at edges)
+            let block_artifact = if quality < 15 { 0.9 } else { 0.95 };
+            
+            for by in 0..block_h {
+                for bx in 0..block_w {
+                    let idx = (y + by) * w + (x + bx);
+                    let original = output.pixels[idx];
+                    
+                    // Mix original with quantized average (simulating DCT)
+                    let mix_factor = 0.7; // How much blockiness
+                    let r = (original.r() as f32 * (1.0 - mix_factor) + avg_r as f32 * mix_factor) as u8;
+                    let g = (original.g() as f32 * (1.0 - mix_factor) + avg_g as f32 * mix_factor) as u8;
+                    let b = (original.b() as f32 * (1.0 - mix_factor) + avg_b as f32 * mix_factor) as u8;
+                    
+                    // Apply blocking artifact at edges
+                    let is_edge = by == 0 || by == block_h - 1 || bx == 0 || bx == block_w - 1;
+                    let final_r = if is_edge { (r as f32 * block_artifact) as u8 } else { r };
+                    let final_g = if is_edge { (g as f32 * block_artifact) as u8 } else { g };
+                    let final_b = if is_edge { (b as f32 * block_artifact) as u8 } else { b };
+                    
+                    output.pixels[idx] = egui::Color32::from_rgb(final_r, final_g, final_b);
+                }
+            }
+        }
+    }
+    
+    output
+}
+
+/// Simulates decoder corruption - frozen macroblocks, static bursts, and data corruption
+/// STUB: Currently disabled, using passthrough
+fn apply_glitch(_input: &ColorImage, _intensity: u8, _seed: u32) -> ColorImage {
+    // TODO: Implement proper glitch effects
+    // Currently just returns input unchanged - needs heavier duty approach
+    _input.clone()
+}
+
+/// Motion glitch - trails and corrupted motion blocks
+/// STUB: Currently disabled, using passthrough
+fn apply_motion_glitch(_input: &ColorImage, _trail_length: u8) -> ColorImage {
+    // TODO: Implement proper motion glitch effects
+    // Currently just returns input unchanged - needs heavier duty approach
+    _input.clone()
+}
+
+/// Datamoshing effect - blocks get displaced and overlaid incorrectly
+/// STUB: Currently disabled, using passthrough  
+fn apply_datamosh(_input: &ColorImage, _displacement: i8) -> ColorImage {
+    // TODO: Implement proper datamosh effects
+    // Currently just returns input unchanged - needs heavier duty approach
+    _input.clone()
 }

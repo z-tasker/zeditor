@@ -42,6 +42,34 @@ jobs:
           name: linux-binaries
           path: artifacts/*
 
+  build-linux-arm64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+      
+      - name: Install cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+      
+      - name: Build binaries
+        run: cross build --release --target aarch64-unknown-linux-gnu
+      
+      - name: Package binaries
+        run: |
+          mkdir -p artifacts
+          cp target/aarch64-unknown-linux-gnu/release/zeditor artifacts/zeditor-linux-arm64
+          cp target/aarch64-unknown-linux-gnu/release/channel-surfer artifacts/channel-surfer-linux-arm64
+      
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-arm64-binaries
+          path: artifacts/*
+
   build-macos-x86_64:
     runs-on: macos-13
     steps:
@@ -147,7 +175,7 @@ jobs:
           path: artifacts/*
 
   create-release:
-    needs: [build-linux, build-macos-x86_64, build-macos-arm64, build-windows]
+    needs: [build-linux, build-linux-arm64, build-macos-x86_64, build-macos-arm64, build-windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write

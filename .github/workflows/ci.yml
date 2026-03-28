@@ -29,6 +29,22 @@ jobs:
       - name: Run tests
         run: cargo test
 
+  test-linux-arm64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+      
+      - name: Install cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+      
+      - name: Build for ARM64
+        run: cross build --target aarch64-unknown-linux-gnu
+
   test-macos:
     runs-on: macos-14
     steps:
