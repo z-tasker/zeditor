@@ -13,6 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
       
       - name: Install dependencies
         run: |
@@ -46,6 +48,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
       
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -74,6 +78,8 @@ jobs:
     runs-on: macos-13
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
       
       - name: Install dependencies
         run: |
@@ -110,6 +116,8 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
       
       - name: Install dependencies
         run: |
@@ -146,6 +154,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
       
       - name: Install dependencies
         run: |
