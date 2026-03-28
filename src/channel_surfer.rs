@@ -3,6 +3,9 @@ use std::time::Instant;
 use std::path::Path;
 use std::process::Command;
 
+mod shader;
+use shader::VideoEffect;
+
 pub struct ChannelSurfer {
     // List of video files (channels)
     pub channels: Vec<String>,
@@ -16,17 +19,35 @@ pub struct ChannelSurfer {
     player: Option<egui_video::Player>,
     audio_device: Option<egui_video::AudioDevice>,
     
+    // Video metadata for scrubber
+    video_duration_ms: f64,
+    
     // UI state
     pub show_channel_info: bool,
     pub channel_info_timer: Option<Instant>,
     
     // Mouse activity tracking for controls auto-hide
     last_mouse_activity: Instant,
-    show_controls: bool,
     mouse_pos: Option<egui::Pos2>,
     
     // Loading
     pending_video: Option<String>,
+    
+    // Scrubber seeking state
+    is_seeking: bool,
+    seek_target: f64,
+    
+    // Glitch mode for compression artifacts
+    glitch_mode: bool,
+    
+    // Active CPU video effect for post-processing
+    active_effect: VideoEffect,
+    
+    // Processed frame texture (when using CPU effects)
+    processed_texture: Option<egui::TextureHandle>,
+    
+    // Last processed frame to prevent flicker when decoder is busy
+    last_processed_frame: Option<egui::ColorImage>,
 }
 
 impl ChannelSurfer {
@@ -46,12 +67,33 @@ impl ChannelSurfer {
             muted: true,   // Start muted
             player: None,
             audio_device,
+            video_duration_ms: 0.0,
             show_channel_info: true,
             channel_info_timer: Some(now),
             last_mouse_activity: now,
-            show_controls: true,
             mouse_pos: None,
             pending_video: pending,
+            is_seeking: false,
+            seek_target: 0.0,
+            glitch_mode: false,
+            active_effect: VideoEffect::default(),
+            processed_texture: None,
+            last_processed_frame: None,
+        }
+    }
+    
+    fn cycle_effect(&mut self) {
+        self.active_effect = self.active_effect.next();
+        // Clear cache when effect changes to prevent visual glitches
+        self.last_processed_frame = None;
+        println!("Effect: {}", self.active_effect.name());
+    }
+    
+    fn get_effect_name(&self) -> Option<&str> {
+        if self.active_effect == VideoEffect::None {
+            None
+        } else {
+            Some(self.active_effect.name())
         }
     }
     
@@ -78,11 +120,19 @@ impl ChannelSurfer {
             player.options.audio_volume.set(volume as f32);
         }
         
+        // Get video duration for scrubber (public field, not method)
+        self.video_duration_ms = player.duration_ms as f64;
+        
         // Auto-start playback
         player.start();
         
         self.player = Some(player);
         self.playing = true;
+        self.is_seeking = false;
+        
+        // Clear processed texture and cache on video change
+        self.processed_texture = None;
+        self.last_processed_frame = None;
         
         // Show channel info briefly
         self.show_channel_info = true;
@@ -148,6 +198,37 @@ impl ChannelSurfer {
             .to_string()
     }
     
+    fn format_time_pair(current_secs: f64, total_secs: f64) -> (String, String) {
+        let current_hours = (current_secs / 3600.0) as u64;
+        let current_mins = ((current_secs % 3600.0) / 60.0) as u64;
+        let current_secs_rem = (current_secs % 60.0) as u64;
+        
+        let total_hours = (total_secs / 3600.0) as u64;
+        let total_mins = ((total_secs % 3600.0) / 60.0) as u64;
+        let total_secs_rem = (total_secs % 60.0) as u64;
+        
+        // Match format based on total duration length
+        if total_hours > 0 {
+            // Long videos: HH:MM:SS
+            (
+                format!("{:02}:{:02}:{:02}", current_hours, current_mins, current_secs_rem),
+                format!("{:02}:{:02}:{:02}", total_hours, total_mins, total_secs_rem)
+            )
+        } else if total_mins > 0 {
+            // Medium videos: MM:SS
+            (
+                format!("{:02}:{:02}", current_mins, current_secs_rem),
+                format!("{:02}:{:02}", total_mins, total_secs_rem)
+            )
+        } else {
+            // Short videos (< 1 min): just seconds
+            (
+                format!("{}", current_secs_rem),
+                format!("{}", total_secs_rem)
+            )
+        }
+    }
+    
     fn draw_channel_overlay(&mut self, ctx: &egui::Context) {
         // Hide channel info after 2 seconds
         if let Some(timer) = self.channel_info_timer {
@@ -190,6 +271,22 @@ impl ChannelSurfer {
                         .size(14.0)
                         .color(egui::Color32::WHITE)
                 );
+                if self.glitch_mode {
+                    ui.label(
+                        egui::RichText::new("GLITCH")
+                            .size(14.0)
+                            .color(egui::Color32::RED)
+                            .strong()
+                    );
+                }
+                if let Some(effect_name) = self.get_effect_name() {
+                    ui.label(
+                        egui::RichText::new(format!("FX: {}", effect_name))
+                            .size(12.0)
+                            .color(egui::Color32::YELLOW)
+                            .strong()
+                    );
+                }
             });
     }
 }
@@ -230,11 +327,6 @@ impl eframe::App for ChannelSurfer {
             self.mouse_pos = current_pos;
         });
         
-        // Auto-hide controls once after 3 seconds (never bring them back)
-        if self.show_controls && self.last_mouse_activity.elapsed().as_secs() > 3 {
-            self.show_controls = false;
-        }
-        
         // Auto-hide OS cursor after 3 seconds of mouse inactivity
         let cursor_should_show = self.last_mouse_activity.elapsed().as_secs() < 3;
         if cursor_should_show {
@@ -243,17 +335,15 @@ impl eframe::App for ChannelSurfer {
             ctx.set_cursor_icon(egui::CursorIcon::None);
         }
         
-        // Handle input
+        // Handle keyboard input (not mouse clicks)
         ctx.input(|i| {
-            // Left click or right arrow -> next channel
-            if i.pointer.button_pressed(egui::PointerButton::Primary) ||
-               i.key_pressed(egui::Key::ArrowRight) {
+            // Right arrow -> next channel
+            if i.key_pressed(egui::Key::ArrowRight) {
                 self.next_channel();
             }
             
-            // Right click or left arrow -> previous channel
-            if i.pointer.button_pressed(egui::PointerButton::Secondary) ||
-               i.key_pressed(egui::Key::ArrowLeft) {
+            // Left arrow -> previous channel
+            if i.key_pressed(egui::Key::ArrowLeft) {
                 self.prev_channel();
             }
             
@@ -265,6 +355,17 @@ impl eframe::App for ChannelSurfer {
             // M to toggle mute
             if i.key_pressed(egui::Key::M) {
                 self.toggle_mute();
+            }
+            
+            // G to toggle glitch mode
+            if i.key_pressed(egui::Key::G) {
+                self.glitch_mode = !self.glitch_mode;
+                println!("Glitch mode: {}", if self.glitch_mode { "ON" } else { "OFF" });
+            }
+            
+            // S to cycle through video effects
+            if i.key_pressed(egui::Key::S) {
+                self.cycle_effect();
             }
             
             // Q or Esc to show channel info again
@@ -314,10 +415,61 @@ impl eframe::App for ChannelSurfer {
                     egui::vec2(available.x, available.x / aspect)
                 };
                 
-                // Center the video
-                ui.centered_and_justified(|ui| {
-                    player.render_frame(ui, target_size);
-                });
+                // Apply CPU effects if active
+                let video_response = if self.active_effect != VideoEffect::None {
+                    // Try to get latest frame and apply effect
+                    let frame_to_display = if let Some(original_frame) = player.get_latest_frame() {
+                        // Process new frame
+                        let processed = self.active_effect.apply(&original_frame);
+                        self.last_processed_frame = Some(processed.clone());
+                        processed
+                    } else if let Some(ref cached) = self.last_processed_frame {
+                        // Use cached frame if we can't get new one (prevents flicker)
+                        cached.clone()
+                    } else {
+                        // No frame at all yet - create placeholder
+                        egui::ColorImage::new([1, 1], egui::Color32::BLACK)
+                    };
+                    
+                    // Update or create processed texture
+                    let texture = self.processed_texture.get_or_insert_with(|| {
+                        ui.ctx().load_texture(
+                            "processed_video",
+                            egui::ColorImage::example(),
+                            Default::default()
+                        )
+                    });
+                    
+                    texture.set(frame_to_display, Default::default());
+                    
+                    // Display processed frame
+                    ui.centered_and_justified(|ui| {
+                        ui.add(
+                            egui::Image::new(egui::load::SizedTexture::new(texture.id(), target_size))
+                                .sense(egui::Sense::click())
+                        )
+                    }).inner
+                } else {
+                    // No effect - display normal video
+                    ui.centered_and_justified(|ui| {
+                        player.render_frame(ui, target_size)
+                    }).inner
+                };
+                
+                // Handle clicks on the video area (not on UI controls like scrubber)
+                // Only change channel if click is in the upper 85% of screen (above scrubber)
+                let click_pos = ctx.input(|i| i.pointer.latest_pos());
+                let screen_height = ctx.screen_rect().height();
+                let is_above_scrubber = click_pos.map(|p| p.y < screen_height * 0.85).unwrap_or(false);
+                
+                if is_above_scrubber {
+                    if video_response.clicked_by(egui::PointerButton::Primary) {
+                        self.next_channel();
+                    }
+                    if video_response.clicked_by(egui::PointerButton::Secondary) {
+                        self.prev_channel();
+                    }
+                }
             } else {
                 // No video loaded - show instructions
                 ui.centered_and_justified(|ui| {
@@ -355,18 +507,105 @@ impl eframe::App for ChannelSurfer {
         // Draw channel overlay
         self.draw_channel_overlay(ctx);
         
-        // Bottom panel - controls hint (auto-hides after mouse inactivity)
-        if self.show_controls {
-            egui::TopBottomPanel::bottom("controls_hint").show(ctx, |ui| {
-                ui.horizontal_centered(|ui| {
-                    ui.label(
-                        egui::RichText::new("Left Click / → = Next Channel    Right Click / ← = Previous Channel    Space = Play/Pause    M = Mute    Q = Show Info")
-                            .size(12.0)
-                            .color(egui::Color32::GRAY)
-                    );
+        // Bottom scrubber panel - auto-hides/shows based on mouse activity like cursor
+        let show_scrubber = self.last_mouse_activity.elapsed().as_secs() < 3;
+        if show_scrubber {
+            egui::TopBottomPanel::bottom("scrubber_panel")
+                .frame(egui::Frame::none()
+                    .inner_margin(8.0)
+                    .fill(egui::Color32::from_rgb(20, 20, 20)))
+                .show(ctx, |ui| {
+                    if let Some(ref player) = self.player {
+                        let duration_ms = self.video_duration_ms;
+                        let current_ms = if self.is_seeking {
+                            self.seek_target * duration_ms
+                        } else {
+                            player.elapsed_ms() as f64
+                        };
+                        
+                        if duration_ms > 0.0 {
+                            let progress = current_ms / duration_ms;
+                            let bar_width = ui.available_width() - 20.0;
+                            let bar_height = 28.0;
+                            
+                            // Draw a custom full-width progress bar
+                            let (rect, response) = ui.allocate_exact_size(
+                                egui::vec2(bar_width, bar_height),
+                                egui::Sense::click_and_drag()
+                            );
+                            
+                            // Draw the background
+                            let bg_color = egui::Color32::from_rgb(50, 50, 50);
+                            ui.painter().rect_filled(rect, 4.0, bg_color);
+                            
+                            // Draw the filled portion
+                            let filled_width = rect.width() * progress as f32;
+                            if filled_width > 0.0 {
+                                let filled_rect = egui::Rect::from_min_size(
+                                    rect.min,
+                                    egui::vec2(filled_width, rect.height())
+                                );
+                                ui.painter().rect_filled(filled_rect, 4.0, egui::Color32::from_rgb(0, 120, 255));
+                            }
+                            
+                            // Draw the handle
+                            let handle_size = 16.0;
+                            let handle_pos = egui::pos2(
+                                rect.min.x + filled_width - (handle_size / 2.0),
+                                rect.center().y - (handle_size / 2.0)
+                            );
+                            let handle_rect = egui::Rect::from_min_size(handle_pos, egui::vec2(handle_size, handle_size));
+                            ui.painter().circle_filled(
+                                handle_rect.center(),
+                                handle_size / 2.0,
+                                egui::Color32::WHITE
+                            );
+                            
+                            // Handle interaction
+                            if response.dragged() || response.clicked() {
+                                if let Some(pointer_pos) = response.interact_pointer_pos() {
+                                    let relative_x = (pointer_pos.x - rect.min.x).max(0.0).min(rect.width());
+                                    let seek_frac = relative_x / rect.width();
+                                    
+                                    self.is_seeking = true;
+                                    self.seek_target = seek_frac as f64;
+                                    
+                                    // Perform the seek
+                                    if let Some(ref mut player) = self.player {
+                                        player.seek(seek_frac as f32);
+                                    }
+                                }
+                            }
+                            
+                            if response.drag_stopped() {
+                                self.is_seeking = false;
+                            }
+                            
+                            // Time and percentage on a second line
+                            ui.horizontal(|ui| {
+                                let current_secs = current_ms / 1000.0;
+                                let total_secs = duration_ms / 1000.0;
+                                let (current_formatted, total_formatted) = Self::format_time_pair(current_secs, total_secs);
+                                ui.label(
+                                    egui::RichText::new(format!("{} / {}", current_formatted, total_formatted))
+                                        .size(13.0)
+                                        .color(egui::Color32::LIGHT_GRAY)
+                                );
+                                
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    ui.label(
+                                        egui::RichText::new(format!("{:.0}%", progress * 100.0))
+                                            .size(13.0)
+                                            .color(egui::Color32::LIGHT_GRAY)
+                                    );
+                                });
+                            });
+                        }
+                    }
                 });
-            });
         }
+        
+        // Controls are intuitive: click video for next channel, arrow keys, space to pause, etc.
     }
 }
 

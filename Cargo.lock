@@ -1044,8 +1044,6 @@ dependencies = [
 [[package]]
 name = "egui-video"
 version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f10c6d6d21ef2ebd89db52aad6f981eff5646a5bc60a90b092e4beb518749488"
 dependencies = [
  "anyhow",
  "atomic",
