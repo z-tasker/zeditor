@@ -20,7 +20,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libsdl2-dev pkg-config libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libavdevice-dev
+          sudo apt-get install -y libsdl2-dev pkg-config libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libavdevice-dev libclang-dev
       
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -83,7 +83,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libsdl2-dev pkg-config libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libavdevice-dev
+          sudo apt-get install -y libsdl2-dev pkg-config libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libavdevice-dev libclang-dev
       
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
