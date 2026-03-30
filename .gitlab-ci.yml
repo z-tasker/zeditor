@@ -14,7 +14,7 @@ cache:
     - target/
     - .cargo/
 
-# Linux x86_64 test
+# Linux x86_64 test (runs on ubuntu runner)
 test-linux:
   stage: test
   image: ubuntu:24.04
@@ -26,51 +26,21 @@ test-linux:
     - cargo build
     - cargo test
   tags:
-    - x86_64
-    - linux
+    - ubuntu
 
-# Linux ARM64 test (Raspberry Pi, etc.)
-test-linux-arm64:
-  stage: test
-  image: ubuntu:24.04
-  before_script:
-    - apt-get update && apt-get install -y curl libsdl2-dev pkg-config libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libavdevice-dev libclang-dev git
-    - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-    - source $HOME/.cargo/env
-  script:
-    - cargo build
-    - cargo test
-  tags:
-    - aarch64
-    - linux
-
-# macOS Intel test
-test-macos-x86_64:
+# macOS Apple Silicon test (runs on macos runner)
+test-macos:
   stage: test
   tags:
-    - x86_64
-    - darwin
+    - macos
   before_script:
     - brew install ffmpeg@7 sdl2 pkg-config || true
   script:
-    - export PKG_CONFIG_PATH="/usr/local/opt/ffmpeg@7/lib/pkgconfig:/usr/local/opt/sdl2/lib/pkgconfig"
+    - export PKG_CONFIG_PATH="/opt/homebrew/opt/ffmpeg@7/libpkgconfig:/opt/homebrew/opt/sdl2/lib/pkgconfig"
     - cargo build
     - cargo test
 
-# macOS Apple Silicon test
-test-macos-arm64:
-  stage: test
-  tags:
-    - aarch64
-    - darwin
-  before_script:
-    - brew install ffmpeg@7 sdl2 pkg-config || true
-  script:
-    - export PKG_CONFIG_PATH="/opt/homebrew/opt/ffmpeg@7/lib/pkgconfig:/opt/homebrew/opt/sdl2/lib/pkgconfig"
-    - cargo build
-    - cargo test
-
-# Lint checks
+# Lint checks (runs on ubuntu runner)
 lint:
   stage: lint
   image: ubuntu:24.04
@@ -83,11 +53,10 @@ lint:
     - cargo fmt -- --check
     - cargo clippy -- -D warnings
   tags:
-    - x86_64
-    - linux
+    - ubuntu
 
 # Release builds (only run on version tags like v1.0.0)
-release-linux-x86_64:
+release-linux:
   stage: release
   image: ubuntu:24.04
   rules:
@@ -101,71 +70,27 @@ release-linux-x86_64:
     - strip target/release/zeditor
     - strip target/release/channel-surfer
   artifacts:
-    name: "zeditor-$CI_COMMIT_TAG-linux-x86_64"
+    name: "zeditor-$CI_COMMIT_TAG-linux"
     paths:
       - target/release/zeditor
       - target/release/channel-surfer
     expire_in: 30 days
   tags:
-    - x86_64
-    - linux
+    - ubuntu
 
-release-linux-arm64:
-  stage: release
-  image: ubuntu:24.04
-  rules:
-    - if: $CI_COMMIT_TAG =~ /^v[0-9]+\./
-  before_script:
-    - apt-get update && apt-get install -y curl libsdl2-dev pkg-config libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libavdevice-dev libclang-dev git
-    - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-    - source $HOME/.cargo/env
-  script:
-    - cargo build --release
-    - strip target/release/zeditor
-    - strip target/release/channel-surfer
-  artifacts:
-    name: "zeditor-$CI_COMMIT_TAG-linux-arm64"
-    paths:
-      - target/release/zeditor
-      - target/release/channel-surfer
-    expire_in: 30 days
-  tags:
-    - aarch64
-    - linux
-
-release-macos-x86_64:
+release-macos:
   stage: release
   rules:
     - if: $CI_COMMIT_TAG =~ /^v[0-9]+\./
   tags:
-    - x86_64
-    - darwin
-  before_script:
-    - brew install ffmpeg@7 sdl2 pkg-config || true
-  script:
-    - export PKG_CONFIG_PATH="/usr/local/opt/ffmpeg@7/lib/pkgconfig:/usr/local/opt/sdl2/lib/pkgconfig"
-    - cargo build --release
-  artifacts:
-    name: "zeditor-$CI_COMMIT_TAG-macos-x86_64"
-    paths:
-      - target/release/zeditor
-      - target/release/channel-surfer
-    expire_in: 30 days
-
-release-macos-arm64:
-  stage: release
-  rules:
-    - if: $CI_COMMIT_TAG =~ /^v[0-9]+\./
-  tags:
-    - aarch64
-    - darwin
+    - macos
   before_script:
     - brew install ffmpeg@7 sdl2 pkg-config || true
   script:
     - export PKG_CONFIG_PATH="/opt/homebrew/opt/ffmpeg@7/lib/pkgconfig:/opt/homebrew/opt/sdl2/lib/pkgconfig"
     - cargo build --release
   artifacts:
-    name: "zeditor-$CI_COMMIT_TAG-macos-arm64"
+    name: "zeditor-$CI_COMMIT_TAG-macos"
     paths:
       - target/release/zeditor
       - target/release/channel-surfer
