@@ -65,12 +65,12 @@ jobs:
       
       - name: Build
         run: |
-          export PKG_CONFIG_PATH="/opt/homebrew/opt/ffmpeg@7/lib/pkgconfig"
+          export PKG_CONFIG_PATH="/opt/homebrew/opt/ffmpeg@7/lib/pkgconfig:/opt/homebrew/opt/sdl2/lib/pkgconfig"
           cargo build
       
       - name: Run tests
         run: |
-          export PKG_CONFIG_PATH="/opt/homebrew/opt/ffmpeg@7/lib/pkgconfig"
+          export PKG_CONFIG_PATH="/opt/homebrew/opt/ffmpeg@7/lib/pkgconfig:/opt/homebrew/opt/sdl2/lib/pkgconfig"
           cargo test
 
   lint:

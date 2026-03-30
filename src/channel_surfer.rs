@@ -642,7 +642,7 @@ impl eframe::App for ChannelSurfer {
 
                                     // Perform the seek
                                     if let Some(ref mut player) = self.player {
-                                        player.seek(seek_frac as f32);
+                                        player.seek(seek_frac);
                                     }
                                 }
                             }

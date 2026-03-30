@@ -129,7 +129,7 @@ impl App {
 
         // i sets IN point (must be <= OUT if OUT exists)
         if i.key_pressed(egui::Key::I) {
-            let valid = self.clip_end.map_or(true, |end| self.current_frame <= end);
+            let valid = self.clip_end.is_none_or(|end| self.current_frame <= end);
             if valid {
                 actions.set_in = true;
             }
@@ -139,7 +139,7 @@ impl App {
         if i.key_pressed(egui::Key::O) {
             let valid = self
                 .clip_start
-                .map_or(true, |start| self.current_frame >= start);
+                .is_none_or(|start| self.current_frame >= start);
             if valid {
                 actions.set_out = true;
             }

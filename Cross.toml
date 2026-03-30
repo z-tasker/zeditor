@@ -1,0 +1,6 @@
+[target.aarch64-unknown-linux-gnu]
+image = "ghcr.io/cross-rs/aarch64-unknown-linux-gnu:main"
+# Install FFmpeg development libraries in the cross container
+pre-build = [
+    "apt-get update && apt-get install -y libsdl2-dev pkg-config libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libavdevice-dev libclang-dev"
+]

@@ -92,7 +92,7 @@ jobs:
       
       - name: Build binaries
         run: |
-          export PKG_CONFIG_PATH="/usr/local/opt/ffmpeg@7/lib/pkgconfig"
+          export PKG_CONFIG_PATH="/usr/local/opt/ffmpeg@7/lib/pkgconfig:/usr/local/opt/sdl2/lib/pkgconfig"
           cargo build --release
       
       - name: Strip binaries
@@ -130,7 +130,7 @@ jobs:
       
       - name: Build binaries
         run: |
-          export PKG_CONFIG_PATH="/opt/homebrew/opt/ffmpeg@7/lib/pkgconfig"
+          export PKG_CONFIG_PATH="/opt/homebrew/opt/ffmpeg@7/lib/pkgconfig:/opt/homebrew/opt/sdl2/lib/pkgconfig"
           cargo build --release
       
       - name: Strip binaries

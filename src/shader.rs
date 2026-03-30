@@ -6,9 +6,10 @@
 use egui::ColorImage;
 
 /// Types of CPU video effects
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub enum VideoEffect {
     /// No effect - passthrough
+    #[default]
     None,
     /// Heavy pixelation (blocky compression artifacts)
     Pixelate { block_size: usize },
@@ -112,12 +113,6 @@ impl VideoEffect {
     }
 }
 
-impl Default for VideoEffect {
-    fn default() -> Self {
-        VideoEffect::None
-    }
-}
-
 /// Apply pixelation effect
 fn apply_pixelate(input: &ColorImage, block_size: usize) -> ColorImage {
     let [w, h] = input.size;
@@ -201,7 +196,7 @@ fn apply_rgb_split(input: &ColorImage, offset: usize) -> ColorImage {
             let g = input.pixels[idx].g();
 
             // Get B from offset to the left
-            let b_x = if x >= offset { x - offset } else { 0 };
+            let b_x = x.saturating_sub(offset);
             let b_idx = y * w + b_x;
             let b = input.pixels[b_idx].b();
 
