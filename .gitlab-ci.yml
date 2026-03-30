@@ -19,7 +19,7 @@ test-linux:
   stage: test
   image: ubuntu:24.04
   before_script:
-    - apt-get update && apt-get install -y curl libsdl2-dev pkg-config libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libavdevice-dev libclang-dev git
+    - apt-get update && apt-get install -y curl build-essential libsdl2-dev pkg-config libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libavdevice-dev libclang-dev git
     - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
     - source $HOME/.cargo/env
   script:
@@ -45,7 +45,7 @@ lint:
   stage: lint
   image: ubuntu:24.04
   before_script:
-    - apt-get update && apt-get install -y curl libsdl2-dev pkg-config libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libavdevice-dev libclang-dev git
+    - apt-get update && apt-get install -y curl build-essential libsdl2-dev pkg-config libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libavdevice-dev libclang-dev git
     - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
     - source $HOME/.cargo/env
     - rustup component add rustfmt clippy
@@ -62,7 +62,7 @@ release-linux:
   rules:
     - if: $CI_COMMIT_TAG =~ /^v[0-9]+\./
   before_script:
-    - apt-get update && apt-get install -y curl libsdl2-dev pkg-config libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libavdevice-dev libclang-dev git
+    - apt-get update && apt-get install -y curl build-essential libsdl2-dev pkg-config libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libavdevice-dev libclang-dev git
     - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
     - source $HOME/.cargo/env
   script:
